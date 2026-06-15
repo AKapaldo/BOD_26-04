@@ -21,24 +21,24 @@ The three server-side variables (KEV, Automatable, Technical Impact) are publish
 
 ### Remediation Timeline Matrix
 
-| Exposed | KEV | Automatable | Technical Impact | Timeline |
-|:---:|:---:|:---:|:---:|:---:|
-| ✅ | ✅ | ✅ | Total | **3 days & Forensic Triage** |
-| ✅ | ✅ | ✅ | Partial | **3 days** |
-| ✅ | ✅ | — | Total | **3 days & Forensic Triage** |
-| ✅ | ✅ | — | Partial | **14 days** |
-| ✅ | — | ✅ | Total | **3 days** |
-| ✅ | — | ✅ | Partial | **30 days** |
-| ✅ | — | — | Total | **30 days** |
-| ✅ | — | — | Partial | **60 days** |
-| — | ✅ | ✅ | Total | **3 days & Forensic Triage** |
-| — | ✅ | ✅ | Partial | **14 days** |
-| — | ✅ | — | Total | **14 days** |
-| — | ✅ | — | Partial | **14 days** |
-| — | — | ✅ | Total | **60 days** |
-| — | — | ✅ | Partial | **60 days** |
-| — | — | — | Total | **Fix on System Upgrade** |
-| — | — | — | Partial | **Fix on System Upgrade** |
+| # | Exposed | KEV | Automatable | Technical Impact | Timeline |
+|:---:|:---:|:---:|:---:|:---:|:---:|
+| 1 | ✅ | ✅ | ✅ | Total | **3 days & Forensic Triage** |
+| 2 | ✅ | ✅ | ✅ | Partial | **3 days** |
+| 3 | ✅ | ✅ | — | Total | **3 days & Forensic Triage** |
+| 4 | ✅ | ✅ | — | Partial | **14 days** |
+| 5 | ✅ | — | ✅ | Total | **3 days** |
+| 6 | ✅ | — | ✅ | Partial | **30 days** |
+| 7 | ✅ | — | — | Total | **30 days** |
+| 8 | ✅ | — | — | Partial | **60 days** |
+| 9 | — | ✅ | ✅ | Total | **3 days & Forensic Triage** |
+| 10 | — | ✅ | ✅ | Partial | **14 days** |
+| 11 | — | ✅ | — | Total | **14 days** |
+| 12 | — | ✅ | — | Partial | **14 days** |
+| 13 | — | — | ✅ | Total | **60 days** |
+| 14 | — | — | ✅ | Partial | **60 days** |
+| 15 | — | — | — | Total | **Fix on System Upgrade** |
+| 16 | — | — | — | Partial | **Fix on System Upgrade** |
 
 
 ---
