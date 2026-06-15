@@ -28,7 +28,7 @@ The three server-side variables (KEV, Automatable, Technical Impact) are publish
 | 3 | ✅ | ✅ | — | Total | **3 days & Forensic Triage** |
 | 4 | ✅ | ✅ | — | Partial | **14 days** |
 | 5 | ✅ | — | ✅ | Total | **3 days** |
-| 6 | ✅ | — | ✅ | Partial | **30 days** |
+| 6 | ✅ | — | ✅ | Partial | **14 days** |
 | 7 | ✅ | — | — | Total | **30 days** |
 | 8 | ✅ | — | — | Partial | **60 days** |
 | 9 | — | ✅ | ✅ | Total | **3 days & Forensic Triage** |
