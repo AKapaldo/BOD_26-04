@@ -393,7 +393,7 @@ def print_result(r: dict, c: bool = True) -> None:
 
 
 def print_summary_table(results: list[dict], c: bool = True) -> None:
-    hdr = f"{'CVE ID':<20} {'KEV':<5} {'Auto':<5} {'Impact':<9} {'Sev':<9} {'If Exposed':<26} {'If Not Exposed':<23}"
+    hdr = f"{'CVE ID':<20} {'KEV':<5} {'Auto':<5} {'Impact':<9} {'Sev':<9} {'If Exposed':<26} {'If Not Exposed':<26}"
     sep = "─" * len(hdr)
     print(f"\n{BOLD}BOD 26-04 Summary{RST}\n{sep}" if c else f"\nBOD 26-04 Summary\n{sep}")
     print(hdr)
@@ -404,7 +404,7 @@ def print_summary_table(results: list[dict], c: bool = True) -> None:
             continue
         row = (f"{r['cve_id']:<20} {r['kev']:<5} {r['automatable']:<5} "
                f"{r['technical_impact']:<9} {r['severity']:<9} "
-               f"{r['timeline_if_exposed']:<26} {r['timeline_if_not_exposed']:<23}")
+               f"{r['timeline_if_exposed']:<26} {r['timeline_if_not_exposed']:<26}")
         if c:
             tl = r["timeline_if_exposed"]
             if   "3 DAYS"  in tl: row = f"{RED}{BOLD}{row}{RST}"
