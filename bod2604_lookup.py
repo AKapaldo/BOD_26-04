@@ -304,10 +304,11 @@ def c_sev(s: str)  -> str:
 def c_yn(v: str)   -> str:
     return f"{RED}YES{RST}" if v.upper() == "YES" else (f"{GRN}NO{RST}" if v.upper() == "NO" else v)
 
-def c_tl(t: str)   -> str:
-    if "3 DAYS"  in t: return f"{RED}{BOLD}{t}{RST}"
-    if "7 DAYS"  in t: return f"{RED}{t}{RST}"
-    if "14 DAYS" in t or "30 DAYS" in t: return f"{YEL}{t}{RST}"
+def c_tl(t: str) -> str:
+    if "3 DAYS"   in t: return f"{RED}{BOLD}{t}{RST}"
+    if "14 DAYS"  in t: return f"{YEL}{t}{RST}"
+    if "30 DAYS"  in t: return f"{YEL}{t}{RST}"
+    if "60 DAYS"  in t: return f"{GRN}{t}{RST}"
     return f"{GRN}{t}{RST}"
 
 def c_tech(v: str) -> str:
@@ -392,7 +393,7 @@ def print_result(r: dict, c: bool = True) -> None:
 
 
 def print_summary_table(results: list[dict], c: bool = True) -> None:
-    hdr = f"{'CVE ID':<20} {'KEV':<5} {'Auto':<5} {'Impact':<9} {'Sev':<9} {'If Exposed':<16} {'If Not Exposed'}"
+    hdr = f"{'CVE ID':<20} {'KEV':<5} {'Auto':<5} {'Impact':<9} {'Sev':<9} {'If Exposed':<26} {'If Not Exposed':<23}"
     sep = "─" * len(hdr)
     print(f"\n{BOLD}BOD 26-04 Summary{RST}\n{sep}" if c else f"\nBOD 26-04 Summary\n{sep}")
     print(hdr)
@@ -403,12 +404,12 @@ def print_summary_table(results: list[dict], c: bool = True) -> None:
             continue
         row = (f"{r['cve_id']:<20} {r['kev']:<5} {r['automatable']:<5} "
                f"{r['technical_impact']:<9} {r['severity']:<9} "
-               f"{r['timeline_if_exposed']:<16} {r['timeline_if_not_exposed']}")
+               f"{r['timeline_if_exposed']:<26} {r['timeline_if_not_exposed']:<23}")
         if c:
             tl = r["timeline_if_exposed"]
             if   "3 DAYS"  in tl: row = f"{RED}{BOLD}{row}{RST}"
-            elif "7 DAYS"  in tl: row = f"{RED}{row}{RST}"
-            elif "14 DAYS" in tl or "30 DAYS" in tl: row = f"{YEL}{row}{RST}"
+            elif "14 DAYS" in tl: row = f"{YEL}{row}{RST}"
+            elif "30 DAYS" in tl: row = f"{YEL}{row}{RST}"
         print(row)
     print(sep + "\n")
 
@@ -431,7 +432,7 @@ def main():
     parser.add_argument("--kev-only", action="store_true",
                         help="With --recent: only show KEV entries (much smaller set)")
     parser.add_argument("--limit",    type=int, default=0, metavar="N",
-                        help="With --recent: cap results at N (sorted: newest, then severity)")
+                        help="With --recent: cap results at N (sorted: KEV-first, then severity)")
     parser.add_argument("--json",     action="store_true",
                         help="Output raw JSON")
     parser.add_argument("--summary",  action="store_true",
@@ -459,7 +460,6 @@ def main():
         total_found = len(recent_entries)
         print(f"  Found {total_found} CVE(s) — fetching details…", file=sys.stderr)
 
-        # Fetch all, then optionally filter/sort/limit
         results = []
         for entry in recent_entries:
             r = lookup_cve(entry["cve_id"], github_url=entry.get("github_url", ""))
@@ -472,7 +472,6 @@ def main():
             print(f"  KEV filter: {len(results)} of {total_found} are in the KEV catalog.", file=sys.stderr)
 
         if args.limit and len(results) > args.limit:
-            # Sort: KEV first, then by severity, then newest
             results.sort(key=lambda r: (
                 0 if r.get("kev") == "YES" else 1,
                 -SEV_RANK.get(r.get("severity", "N/A"), 0),
@@ -510,9 +509,8 @@ def main():
     if len(results) > 1 or args.summary:
         print_summary_table(results, c=use_color)
 
-    # Exit 1 if any exposed-timeline is 3 or 7 days (useful in pipelines/cron)
     urgent = any(
-        "3 DAYS" in r.get("timeline_if_exposed", "") or "7 DAYS" in r.get("timeline_if_exposed", "")
+        "3 DAYS" in r.get("timeline_if_exposed", "") 
         for r in results if not r.get("error")
     )
     sys.exit(1 if urgent else 0)
