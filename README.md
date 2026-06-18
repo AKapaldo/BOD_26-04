@@ -1,14 +1,67 @@
-# BOD 26-04 CVE Lookup Tool
+<a id="readme-top"></a>
 
-A command-line tool for pulling CVE data directly from the [CVE Program's public repository](https://github.com/CVEProject/cvelistV5) and computing remediation timelines under [CISA Binding Operational Directive 26-04](https://www.cisa.gov/binding-operational-directive-26-04).
+[![Contributors][contributors-shield]][contributors-url]
+[![Forks][forks-shield]][forks-url]
+[![Stargazers][stars-shield]][stars-url]
+[![Issues][issues-shield]][issues-url]
+[![MIT License][license-shield]][license-url]
+
+<br />
+<div align="center">
+  <a href="https://github.com/AKapaldo/BOD_26-04">
+    <img src="images/logo.png" alt="Wildwood Security Logo" width="80" height="80">
+  </a>
+
+<h3 align="center">BOD 26-04 CVE Lookup Tool</h3>
+
+  <p align="center">
+    A fast, concurrent command-line tool for evaluating CVEs against CISA BOD 26-04 remediation timelines.
+    <br />
+    <a href="https://github.com/AKapaldo/BOD_26-04"><strong>Explore the docs »</strong></a>
+    <br />
+    <br />
+    <a href="https://github.com/AKapaldo/BOD_26-04/issues/new?labels=bug&template=bug-report---.md">Report Bug</a>
+    &middot;
+    <a href="https://github.com/AKapaldo/BOD_26-04/issues/new?labels=enhancement&template=feature-request---.md">Request Feature</a>
+  </p>
+</div>
+
+<details>
+  <summary>Table of Contents</summary>
+  <ol>
+    <li>
+      <a href="#about-the-project">About The Project</a>
+      <ul>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#remediation-timeline-matrix">Remediation Timeline Matrix</a></li>
+        <li><a href="#built-with">Built With</a></li>
+      </ul>
+    </li>
+    <li>
+      <a href="#getting-started">Getting Started</a>
+      <ul>
+        <li><a href="#prerequisites">Prerequisites</a></li>
+        <li><a href="#installation">Installation</a></li>
+      </ul>
+    </li>
+    <li>
+      <a href="#usage">Usage</a>
+      <ul>
+        <li><a href="#tenablesc-integration">Tenable.sc Integration</a></li>
+      </ul>
+    </li>
+    <li><a href="#data-sources--schema">Data Sources & Schema</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#license">License</a></li>
+    <li><a href="#contact">Contact</a></li>
+  </ol>
+</details>
+
+## About The Project
+
+BOD 26-04 establishes mandatory vulnerability remediation timelines for federal agencies based on four decision variables. This tool pulls CVE data directly from the [CVE Program's public repository](https://github.com/CVEProject/cvelistV5) and computes those timelines automatically.
 
 Both the **exposed** and **not-exposed** timelines are always shown side by side — you make the asset exposure call from your own inventory; the tool handles everything else.
-
----
-
-## Background
-
-BOD 26-04 establishes mandatory vulnerability remediation timelines for federal agencies based on four decision variables:
 
 | Variable | Source |
 |---|---|
@@ -17,7 +70,19 @@ BOD 26-04 establishes mandatory vulnerability remediation timelines for federal 
 | **Automatable** | CISA SSVC decision point (via Vulnrichment) |
 | **Technical Impact** | CISA SSVC decision point (via Vulnrichment) |
 
-The three server-side variables (KEV, Automatable, Technical Impact) are published by CISA through the [Vulnrichment Program](https://github.com/cisagov/vulnrichment) and are embedded directly in CVE JSON 5 records — no separate API or key required.
+The three server-side variables (KEV, Automatable, Technical Impact) are published by CISA through the [Vulnrichment Program](https://github.com/cisagov/vulnrichment) and are embedded directly in CVE JSON 5 records — no separate API or key required for core functionality.
+
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
+
+### Features
+
+- **Fast Concurrency** — utilizes Python `ThreadPoolExecutor` to fetch and parse CVE records simultaneously.
+- **Zero Core Dependencies** — the base script runs entirely on Python 3 stdlib (`urllib`, `json`, `concurrent.futures`, `argparse`).
+- **Optional Tenable.sc Integration** — automatically pull your active vulnerabilities and evaluate them against BOD timelines. (Requires a non-standard library)
+- **Both timelines always shown** — no flags needed; exposed and not-exposed side by side.
+- **Recent CVE mode** — pulls CVEs published or updated in the last N hours via `deltaLog.json`.
+- **JSON output** — pipe-friendly `--json` flag for integration with jq, SIEM, or dashboards.
+- **Pipeline exit codes** — exits `1` if any result has a 3- or 7-day exposed timeline (cron-friendly).
 
 ### Remediation Timeline Matrix
 
@@ -40,41 +105,37 @@ The three server-side variables (KEV, Automatable, Technical Impact) are publish
 | 15 | — | — | — | Total | **Fix on System Upgrade** |
 | 16 | — | — | — | Partial | **Fix on System Upgrade** |
 
+### Built With
 
----
+* [![Python][Python-shield]][Python-url]
 
-## Features
+<p align="right">(<a href="#readme-top">back to top</a>)</p>
 
-- **Zero dependencies** — pure Python 3 stdlib (`urllib`, `json`, `re`, `argparse`)
-- **Both timelines always shown** — no flags needed; exposed and not-exposed side by side
-- **Recent CVE mode** — pulls CVEs published or updated in the last N hours via `deltaLog.json`
-- **KEV filter** — `--kev-only` narrows recent results to catalog entries (usually a handful per day)
-- **Smart limiting** — `--limit` caps results sorted KEV-first, then by severity
-- **JSON output** — pipe-friendly `--json` flag for integration with jq, SIEM, or dashboards
-- **Color-coded output** — severity and timelines highlighted at a glance; `--no-color` for logging
-- **Pipeline exit codes** — exits `1` if any result has a 3- or 7-day exposed timeline (cron-friendly)
+## Getting Started
 
----
+### Prerequisites
 
-## Requirements
+* Python 3.10+
+* Internet access to `raw.githubusercontent.com`
+* *(Optional)* `pytenable` for Tenable.sc integration
 
-- Python 3.10+
-- Internet access to `raw.githubusercontent.com`
-- No API keys, no third-party packages
+### Installation
 
----
+1. Clone the repo
+   ```sh
+   git clone [https://github.com/AKapaldo/BOD_26-04.git](https://github.com/AKapaldo/BOD_26-04.git)
+   cd BOD_26-04
+    ```
 
-## Installation
+2. Make the script executable
+    ```bash
+   chmod +x bod2604_lookup.py
+    ```
 
-```bash
-git clone https://github.com/AKapaldo/BOD_26-04.git
-cd BOD_26-04
-chmod +x bod2604_lookup.py
-```
-
-That's it.
-
----
+3. (Optional) Install Tenable dependencies if you plan to use `--tenable`
+   ```bash
+   pip install pytenable
+   ```
 
 ## Usage
 
@@ -99,155 +160,61 @@ python3 bod2604_lookup.py --recent --kev-only
 
 # Cap results at 20, sorted KEV-first then by severity
 python3 bod2604_lookup.py --recent --limit 20
-
-# Recommended daily run: KEV entries, top 10 by severity
-python3 bod2604_lookup.py --recent --kev-only --limit 10
 ```
 
-### Feed from a file
-
-```bash
-cat cve_list.txt | xargs python3 bod2604_lookup.py
-```
-
-### JSON output
+### JSON Output
 
 ```bash
 # Full JSON for all results
 python3 bod2604_lookup.py CVE-2021-44228 --json
 
-# Filter with jq — only KEV entries from the last 24h
-python3 bod2604_lookup.py --recent --json | jq '.[] | select(.kev == "YES")'
-
-# Extract just the decision fields
+# Extract just the decision fields via jq
 python3 bod2604_lookup.py --recent --kev-only --json \
   | jq '.[] | {cve_id, kev, automatable, technical_impact, timeline_if_exposed}'
 ```
 
-### Other flags
+
+### Tenable.sc Integration
+
+You can automatically pull active High and Critical vulnerabilities from your Tenable.sc environment and evaluate them against the BOD 26-04 timelines.<br>
+Provide your credentials securely via environment variables:
 
 ```bash
-# Disable ANSI color (for log files or non-TTY output)
-python3 bod2604_lookup.py CVE-2021-44228 --no-color
+export TENABLE_HOST="192.168.1.50"
+export TENABLE_ACCESS_KEY="your_access_key"
+export TENABLE_SECRET_KEY="your_secret_key"
 
-# Force a summary table even for a single result
-python3 bod2604_lookup.py CVE-2021-44228 --summary
+python3 bod2604_lookup.py --tenable
 ```
 
----
-
-## Sample Output
-
-```
-CVE-2021-44228  (PUBLISHED · Published: 2021-12-10)
-──────────────────────────────────────────────────────────────────────────
-  Description:               Apache Log4j2 2.0-beta9 through 2.15.0 JNDI features used in…
-
-  ──────────────────────── BOD 26-04 INPUT FIELDS ────────────────────────
-  KEV Status:                YES  (added 2021-12-10)
-  Automatable:               Yes
-  Technical Impact:          Total
-  Severity (CVSS):           CRITICAL  10 (3.1)
-  Exploitation:              active
-
-  ─────────────────── BOD 26-04 REMEDIATION TIMELINES ───────────────────
-    ⚑ If Asset EXPOSED:      3 DAYS    KEV + Exposed + Automatable + Total Impact
-    ⚑ If Asset NOT Exposed:  30 DAYS   KEV — asset not publicly exposed
-
-  ────────────────────────── ADDITIONAL CONTEXT ──────────────────────────
-  CWE(s):                    CWE-502 – Deserialization of Untrusted Data
-  CVSS Vector:               CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H
-  SSVC Scored:               2025-02-04
-  Affected Products:
-    • Apache Software Foundation – Apache Log4j2 (< log4j-core*)
-  References:
-    • https://logging.apache.org/log4j/2.x/security.html
-    • [KEV] https://www.cisa.gov/known-exploited-vulnerabilities-catalog?id=CVE-2021-44228
-──────────────────────────────────────────────────────────────────────────
-```
-
-Summary table (auto-shown for multiple results):
-
-```
-BOD 26-04 Summary
-──────────────────────────────────────────────────────────────────────────────────────
-CVE ID               KEV   Auto  Impact    Sev       If Exposed       If Not Exposed
-──────────────────────────────────────────────────────────────────────────────────────
-CVE-2021-44228       YES   Yes   Total     CRITICAL  3 DAYS           30 DAYS
-CVE-2023-45727       YES   Yes   Partial   HIGH      7 DAYS           30 DAYS
-CVE-2023-34362       YES   Yes   Total     CRITICAL  3 DAYS           30 DAYS
-──────────────────────────────────────────────────────────────────────────────────────
-```
-
----
-
-## Data Sources
-
+## Data Sources & Schema
 | Source | URL | Notes |
-|---|---|---|
-| CVE JSON 5 records | `raw.githubusercontent.com/CVEProject/cvelistV5` | Authoritative CVE data including CISA Vulnrichment ADP container |
-| Delta log | `.../cves/deltaLog.json` | Rolling 30-day log of hourly changes; used by `--recent` |
+|--------|-----|-------|
+| CVE JSON 5 records | [raw.githubusercontent.com/CVEProject/cvelistV5](raw.githubusercontent.com/CVEProject/cvelistV5) |	Authoritative CVE data including CISA Vulnrichment ADP container |
+| Delta log	| `.../cves/deltaLog.json` | Rolling 30-day log of hourly changes; used by `--recent` |
 
-All data is fetched at runtime — no local database, no caching. CVE records are updated continuously by CNAs and enriched by CISA's Vulnrichment Program.
+All data is fetched at runtime. No local database, no caching.
 
-> **Note:** SSVC enrichment (Automatable, Technical Impact) is provided by CISA for a growing subset of CVEs. Records without enrichment will show `N/A` for those fields, and the timeline will reflect what can be computed from the available data.
+> [!Note]
+> SSVC enrichment (Automatable, Technical Impact) is provided by CISA for a growing subset of CVEs.
+> Records without enrichment will show N/A for those fields, and the timeline will reflect what can be computed from the available data.
 
----
+## Contributing
 
+Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are greatly appreciated.
 
-## JSON Schema
-
-Each result object contains:
-
-```json
-{
-  "cve_id":                  "CVE-2021-44228",
-  "state":                   "PUBLISHED",
-  "published":               "2021-12-10",
-  "description":             "Apache Log4j2 ...",
-  "severity":                "CRITICAL",
-  "cvss_score":              "10",
-  "cvss_version":            "3.1",
-  "cvss_vector":             "CVSS:3.1/AV:N/AC:L/PR:N/UI:N/S:C/C:H/I:H/A:H",
-  "kev":                     "YES",
-  "kev_date_added":          "2021-12-10",
-  "kev_reference":           "https://www.cisa.gov/...",
-  "automatable":             "Yes",
-  "technical_impact":        "Total",
-  "exploitation":            "active",
-  "ssvc_timestamp":          "2025-02-04T...",
-  "cwes":                    ["CWE-502 – Deserialization of Untrusted Data"],
-  "affected":                [{"vendor": "...", "product": "...", "versions": [...]}],
-  "references":              ["https://..."],
-  "timeline_if_exposed":     "3 DAYS",
-  "reason_if_exposed":       "KEV + Exposed + Automatable + Total Impact",
-  "timeline_if_not_exposed": "30 DAYS",
-  "reason_if_not_exposed":   "KEV — asset not publicly exposed",
-  "error":                   null
-}
-```
-
----
-
-## Scope and Limitations
-
-- **Asset exposure is not automated.** BOD 26-04 requires agencies to assess which assets are publicly accessible. This tool provides both timeline scenarios. You apply your inventory knowledge.
-- **SSVC enrichment coverage.** Not all CVEs have been scored by CISA Vulnrichment. New CVEs may have `N/A` for Automatable/Technical Impact until enrichment is published.
-- **Rate limiting.** `raw.githubusercontent.com` is unauthenticated and may throttle bulk requests.
-- **Scope.** BOD 26-04 applies to FCEB agencies. This tool is useful for any organization that wants to align with the directive's prioritization methodology.
-
----
-
-## References
-
-- [CISA BOD 26-04](https://www.cisa.gov/binding-operational-directive-26-04)
-- [CISA Known Exploited Vulnerabilities Catalog](https://www.cisa.gov/known-exploited-vulnerabilities-catalog)
-- [CISA Vulnrichment Program](https://github.com/cisagov/vulnrichment)
-- [CVE Program — cvelistV5](https://github.com/CVEProject/cvelistV5)
-- [SSVC (Stakeholder-Specific Vulnerability Categorization)](https://www.cisa.gov/stakeholder-specific-vulnerability-categorization-ssvc)
-
----
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
 ## License
 
-MIT License. See [LICENSE](LICENSE) for details.
+Distributed under the Apache V2.0 License. See `LICENSE.txt` for more information.
+
+## Contact
+
+Andrew Kapaldo - Wildwood Security
+
+Project Link: [https://github.com/AKapaldo/BOD_26-04](https://github.com/AKapaldo/BOD_26-04)
