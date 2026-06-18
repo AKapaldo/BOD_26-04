@@ -74,6 +74,12 @@ try:
 except ImportError:
     HAS_TENABLE = False
 
+try:
+    import argcomplete
+    HAS_ARGCOMPLETE = True
+except ImportError:
+    HAS_ARGCOMPLETE = False
+
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
@@ -112,18 +118,16 @@ def fetch_json(url: str) -> dict | list:
     req = urllib.request.Request(
         url, headers={"User-Agent": "BOD26-04-Lookup/2.1 (security research)"}
     )
-    with urllib.request.urlopen(req, timeout=20) as resp:
+    if not req.full_url.startswith(("http://", "https://")):
+        raise ValueError("Invalid URL scheme: Only HTTP/HTTPS is allowed.")
+        
+    with urllib.request.urlopen(req, timeout=20) as resp: # nosec B310
         return json.loads(resp.read().decode("utf-8"))
 
 
 def fetch_recent_cve_ids(hours: int = 24) -> list[dict]:
-    """
-    Return CVE entries from deltaLog.json published/updated within the last N hours.
-    Each entry: {cve_id, github_url, date_updated, change_type}
-    Deduplicated; sorted newest-first.
-    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-    log    = fetch_json(DELTA_LOG_URL)   # list of hourly snapshot dicts
+    log    = fetch_json(DELTA_LOG_URL)
 
     seen = {}
     for snapshot in log:
@@ -251,15 +255,36 @@ def bod_timeline(kev: str, exposed: bool, automatable: str, tech_impact: str) ->
     if e and k and t: return "3 DAYS & FORENSIC TRIAGE", "KEV + Exposed + Total Impact"
     if e and k: return "14 DAYS", "KEV + Exposed"
     if e and a and t: return "3 DAYS", "Exposed + Automatable + Total Impact (not KEV)"
-    if e and (a or t): return "30 DAYS", "Exposed + (Automatable OR Total Impact, not KEV)"
+    if e and (a or t): return "30 DAYS", "Exposed + Automatable OR Total Impact (not KEV)"
     if e: return "60 DAYS", "Exposed"
     if k and a and t: return "3 DAYS & FORENSIC TRIAGE", "KEV + Automatable + Total Impact"
-    if k and a: return "14 DAYS", "KEV + Automatable"
-    if k and t: return "14 DAYS", "KEV + Total Impact"
+    if k and (a or t): return "14 DAYS", "KEV + Automatable OR Total Impact"
     if k: return "14 DAYS", "KEV — asset not publicly exposed"
     if a and t: return "60 DAYS", "Automatable + Total Impact"
     if a: return "60 DAYS", "Automatable"
     return "FIX ON SYSTEM UPGRADE", "Does not meet accelerated criteria"
+
+
+def get_due_date_info(published_date_str: str, timeline_str: str) -> tuple[str, bool]:
+    """
+    Parses the timeline string to compute a due date.
+    Returns: (Due Date String, Is Past Due Boolean)
+    """
+    if not published_date_str or published_date_str == "N/A":
+        return "Unknown", False
+    
+    # Extract the number of days from strings like "3 DAYS & FORENSIC TRIAGE"
+    m = re.match(r"^(\d+)", timeline_str)
+    if not m:
+        return "N/A", False
+    
+    try:
+        pub_date = datetime.strptime(published_date_str[:10], "%Y-%m-%d").date()
+        due_date = pub_date + timedelta(days=int(m.group(1)))
+        today = datetime.now().date()
+        return due_date.strftime("%Y-%m-%d"), (due_date < today)
+    except Exception:
+        return "Invalid", False
 
 # ---------------------------------------------------------------------------
 # Main lookup
@@ -282,7 +307,6 @@ def lookup_cve(cve_id: str, github_url: str = "") -> dict:
     cna      = data.get("containers", {}).get("cna", {})
     adp_list = data.get("containers", {}).get("adp", [])
 
-    # Prefer Vulnrichment CVSS; fall back to CNA
     vuln_metrics = next(
         (adp.get("metrics", []) for adp in adp_list if adp.get("title") == "CISA ADP Vulnrichment"), []
     )
@@ -420,24 +444,58 @@ def print_result(r: dict, c: bool = True) -> None:
 
 
 def print_summary_table(results: list[dict], c: bool = True) -> None:
-    hdr = f"{'CVE ID':<20} {'KEV':<5} {'Auto':<5} {'Impact':<9} {'Sev':<9} {'If Exposed':<26} {'If Not Exposed':<26}"
+    hdr = f"{'CVE ID':<20} {'KEV':<5} {'Auto':<5} {'Impact':<9} {'Sev':<9} {'Exposed TL':<26} {'Exp Due':<11} {'Not Exp TL':<26} {'Not Exp Due':<11}"
     sep = "─" * len(hdr)
     print(f"\n{BOLD}BOD 26-04 Summary{RST}\n{sep}" if c else f"\nBOD 26-04 Summary\n{sep}")
     print(hdr)
     print(sep)
+    
     for r in results:
         if r.get("error"):
             print(f"{r['cve_id']:<20} ERROR: {r['error']}")
             continue
-        row = (f"{r['cve_id']:<20} {r['kev']:<5} {r['automatable']:<5} "
-               f"{r['technical_impact']:<9} {r['severity']:<9} "
-               f"{r['timeline_if_exposed']:<26} {r['timeline_if_not_exposed']:<26}")
+            
+        tl_exp = r["timeline_if_exposed"]
+        tl_unexp = r["timeline_if_not_exposed"]
+        pub = r.get("published", "N/A")
+        
+        
+        exp_due_str, exp_past = get_due_date_info(pub, tl_exp)
+        unexp_due_str, unexp_past = get_due_date_info(pub, tl_unexp)
+        
+
+        cve_col       = f"{r['cve_id']:<20}"
+        kev_col       = f"{r['kev']:<5}"
+        auto_col      = f"{r['automatable']:<5}"
+        imp_col       = f"{r['technical_impact']:<9}"
+        sev_col       = f"{r['severity']:<9}"
+        tl_exp_col    = f"{tl_exp:<26}"
+        due_exp_col   = f"{exp_due_str:<11}"
+        tl_unexp_col  = f"{tl_unexp:<26}"
+        due_unexp_col = f"{unexp_due_str:<11}"
+        
         if c:
-            tl = r["timeline_if_exposed"]
-            if   "3 DAYS"  in tl: row = f"{RED}{BOLD}{row}{RST}"
-            elif "14 DAYS" in tl: row = f"{YEL}{row}{RST}"
-            elif "30 DAYS" in tl: row = f"{YEL}{row}{RST}"
-        print(row)
+            if "3 DAYS" in tl_exp:
+                cve_col    = f"{RED}{BOLD}{cve_col}{RST}"
+                tl_exp_col = f"{RED}{BOLD}{tl_exp_col}{RST}"
+            elif "14 DAYS" in tl_exp or "30 DAYS" in tl_exp:
+                cve_col    = f"{YEL}{cve_col}{RST}"
+                tl_exp_col = f"{YEL}{tl_exp_col}{RST}"
+
+            if "3 DAYS" in tl_unexp:
+                tl_unexp_col = f"{RED}{BOLD}{tl_unexp_col}{RST}"
+            elif "14 DAYS" in tl_unexp or "30 DAYS" in tl_unexp:
+                tl_unexp_col = f"{YEL}{tl_unexp_col}{RST}"
+                
+            # Apply Red/Green formatting to the Due Dates if valid
+            if exp_due_str not in ("N/A", "Unknown", "Invalid"):
+                due_exp_col = f"{RED}{due_exp_col}{RST}" if exp_past else f"{GRN}{due_exp_col}{RST}"
+                
+            if unexp_due_str not in ("N/A", "Unknown", "Invalid"):
+                due_unexp_col = f"{RED}{due_unexp_col}{RST}" if unexp_past else f"{GRN}{due_unexp_col}{RST}"
+                
+        print(f"{cve_col} {kev_col} {auto_col} {imp_col} {sev_col} {tl_exp_col} {due_exp_col} {tl_unexp_col} {due_unexp_col}")
+        
     print(sep + "\n")
 
 # ---------------------------------------------------------------------------
@@ -470,11 +528,53 @@ def main():
                         help="Pull active CVEs from Tenable.sc (requires 'pytenable' module)")
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}",
                         help="Show program's version number and exit")
+    if HAS_ARGCOMPLETE:
+        argcomplete.autocomplete(parser)
+        
     args = parser.parse_args()
 
     use_color = not args.no_color and sys.stdout.isatty()
 
-    # ── Recent mode ─────────────────────────────────────────────────────────
+    # ── 1. Tenable.sc mode ───────────────────────────────────────────────────
+    # If Tenable is used, get the CVEs and add them to args.cve_ids so explicit mode can use them below.
+    if args.tenable:
+        if not HAS_TENABLE:
+            print("ERROR: Tenable integration requires the 'pytenable' library.", file=sys.stderr)
+            print("To use this feature: pip install pytenable", file=sys.stderr)
+            sys.exit(1)
+
+        t_host = os.environ.get("TENABLE_HOST")
+        t_access = os.environ.get("TENABLE_ACCESS_KEY")
+        t_secret = os.environ.get("TENABLE_SECRET_KEY")
+
+        if not all([t_host, t_access, t_secret]):
+            print(f"{RED}ERROR: Missing Tenable environment variables.{RST}", file=sys.stderr)
+            print("You must set TENABLE_HOST, TENABLE_ACCESS_KEY, and TENABLE_SECRET_KEY.", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"  Connecting to Tenable.sc at {t_host}...", file=sys.stderr)
+        try:
+            sc = TenableSC(t_host)
+            sc.login(access_key=t_access, secret_key=t_secret)
+            print("  Querying for active High/Critical vulnerabilities...", file=sys.stderr)
+            vulns = sc.analysis.vulns(('severity', '=', '4,3'), ('cveID', '=', '*CVE-*'))
+            
+            unique_cves = set()
+            for vuln in vulns:
+                if 'cve' in vuln:
+                    for cve in vuln['cve'].split(','):
+                        cve = cve.strip().upper()
+                        if cve.startswith('CVE-'):
+                            unique_cves.add(cve)
+                            
+            args.cve_ids.extend(list(unique_cves))
+            print(f"  Found {len(unique_cves)} unique CVE(s) in Tenable.sc.", file=sys.stderr)
+        except Exception as e:
+            print(f"{RED}Tenable API Error: {e}{RST}", file=sys.stderr)
+            sys.exit(1)
+
+    # ── 2. Recent mode ───────────────────────────────────────────────────────
+    # Run this if explicitly requested, OR if no CVE IDs were provided at all.
     if args.recent or not args.cve_ids:
         hours = args.hours
         print(f"  Fetching CVEs from the last {hours}h via deltaLog.json…", file=sys.stderr)
@@ -491,14 +591,12 @@ def main():
         total_found = len(recent_entries)
         print(f"  Found {total_found} CVE(s) — fetching details concurrently…", file=sys.stderr)
 
-        # Helper function for threading
         def fetch_and_enrich(entry):
             r = lookup_cve(entry["cve_id"], github_url=entry.get("github_url", ""))
             r["_change_type"]  = entry["change_type"]
             r["_date_updated"] = entry["date_updated"]
             return r
 
-        # Fetch concurrently with up to 10 threads
         with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
             results = list(executor.map(fetch_and_enrich, recent_entries))
 
@@ -514,55 +612,8 @@ def main():
             results = results[:args.limit]
             print(f"  Capped at {args.limit} result(s) (KEV-first, then by severity).", file=sys.stderr)
 
-
-    # ── Tenable.sc mode ──────────────────────────────────────────────────────
-    if args.tenable:
-        if not HAS_TENABLE:
-            print("ERROR: Tenable integration requires the 'pytenable' library.", file=sys.stderr)
-            print("To use this feature: pip install pytenable", file=sys.stderr)
-            sys.exit(1)
-
-        # Retrieve environment variables
-        t_host = os.environ.get("TENABLE_HOST")
-        t_access = os.environ.get("TENABLE_ACCESS_KEY")
-        t_secret = os.environ.get("TENABLE_SECRET_KEY")
-
-        # Enforce that all required variables are present
-        if not all([t_host, t_access, t_secret]):
-            print(f"{RED}ERROR: Missing Tenable environment variables.{RST}", file=sys.stderr)
-            print("You must set TENABLE_HOST, TENABLE_ACCESS_KEY, and TENABLE_SECRET_KEY.", file=sys.stderr)
-            print(f"{DIM}Example: export TENABLE_ACCESS_KEY='your_key'{RST}", file=sys.stderr)
-            sys.exit(1)
-
-        print(f"  Connecting to Tenable.sc at {t_host}...", file=sys.stderr)
-        
-        try:
-            # Initialize the connection using the environment variables
-            sc = TenableSC(t_host)
-            sc.login(access_key=t_access, secret_key=t_secret)
-            
-            print("  Querying for active High/Critical vulnerabilities...", file=sys.stderr)
-            vulns = sc.analysis.vulns(('severity', '=', '4,3'), ('cveID', '=', '*CVE-*'))
-            
-            unique_cves = set()
-            for vuln in vulns:
-                if 'cve' in vuln:
-                    for cve in vuln['cve'].split(','):
-                        cve = cve.strip().upper()
-                        if cve.startswith('CVE-'):
-                            unique_cves.add(cve)
-                            
-            # Convert the set to a list and assign to args.cve_ids so the explicit mode handles it
-            args.cve_ids = list(unique_cves)
-            print(f"  Found {len(args.cve_ids)} unique CVE(s) in Tenable.sc.", file=sys.stderr)
-            
-        except Exception as e:
-            print(f"{RED}Tenable API Error: {e}{RST}", file=sys.stderr)
-            sys.exit(1)
-            
-
-
-    # ── Explicit CVE mode ────────────────────────────────────────────────────
+    # ── 3. Explicit CVE mode ─────────────────────────────────────────────────
+    # Run this if CVE IDs exist (either from CLI args or Tenable API)
     else:
         cve_list = [c.strip() for c in args.cve_ids if c.strip()]
         if not cve_list:
