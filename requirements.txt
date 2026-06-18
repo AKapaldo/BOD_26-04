@@ -5,7 +5,7 @@
 # Install these packages only if you need the extended features.
 
 # Required for Tenable.sc integration (--tenable)
-pytenable>=1.4.0
+pytenable>=26.6.1
 
 # Required for terminal tab autocompletion
 argcomplete>=3.0.0
