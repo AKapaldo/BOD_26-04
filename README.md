@@ -228,7 +228,7 @@ Project Link: [https://github.com/AKapaldo/BOD_26-04](https://github.com/AKapald
 [stars-url]: https://github.com/AKapaldo/BOD_26-04/stargazers
 [issues-shield]: https://img.shields.io/github/issues/AKapaldo/BOD_26-04.svg?style=for-the-badge
 [issues-url]: https://github.com/AKapaldo/BOD_26-04/issues
-[license-shield]: https://img.shields.io/github/license/AKapaldo/BOD_26-04.svg?style=for-the-badge
-[license-url]: https://github.com/AKapaldo/BOD_26-04/blob/main/LICENSE
+[license-shield]: https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=for-the-badge
+[license-url]: https://opensource.org/licenses/Apache-2.0
 [Python-shield]: https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white
 [Python-url]: https://python.org/
