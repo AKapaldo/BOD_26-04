@@ -1,1 +1,11 @@
-pytenable>=26.6.1
+# ---------------------------------------------------------
+# BOD 26-04 CVE Lookup Tool - Optional Dependencies
+# ---------------------------------------------------------
+# The core script runs on the Python 3 standard library. 
+# Install these packages only if you need the extended features.
+
+# Required for Tenable.sc integration (--tenable)
+pytenable>=1.4.0
+
+# Required for terminal tab autocompletion
+argcomplete>=3.0.0
