@@ -1,51 +1,78 @@
 #!/usr/bin/env python3
+
 """
-BOD 26-04 CVE Lookup Tool
-Fetches CVE data from the CVE Program's public GitHub (cvelistV5) and extracts the fields required to make remediation timeline decisions under CISA BOD 26-04.
+NAME
+    bod2604_lookup.py - CISA BOD 26-04 CVE Timeline Calculator
 
-BOD 26-04 Remediation Decision Variables:
-  1. Asset Exposure    - Must be determined by your own asset inventory
-  2. KEV Status        - In CISA's Known Exploited Vulnerabilities catalog?
-  3. Automatable       - Can an adversary automate all exploitation steps?
-  4. Technical Impact  - Partial or total control post-exploitation?
+SYNOPSIS
+    python3 bod2604_lookup.py [CVE-ID ...] [OPTIONS]
 
-Both "If Exposed" and "If Not Exposed" timelines are always shown so you can make the call based on your own asset inventory.
+DESCRIPTION
+    Fetches vulnerability data from the CVE Program's public GitHub (cvelistV5) 
+    and evaluates it against CISA BOD 26-04 criteria. The tool calculates accelerated 
+    remediation timelines by extracting SSVC Vulnrichment data and checking KEV status.
 
-BOD 26-04 Remediation Timelines are determined by the BOD 26-04, Appendix A, Table 1: Remediation Timelines
+    Both "If Exposed" and "If Not Exposed" timelines are calculated automatically, 
+    allowing you to make final remediation decisions based on your internal asset inventory.
 
-Data sources (no API keys required):
-  CVE records:   https://github.com/CVEProject/cvelistV5  (JSON 5 + Vulnrichment)
-  Recent deltas: .../cvelistV5/main/cves/deltaLog.json    (rolling 30-day history)
+DECISION VARIABLES (BOD 26-04, Appendix A)
+    1. Asset Exposure    - Determined by your asset inventory (Exposed / Not Exposed)
+    2. KEV Status        - Is the vulnerability in CISA's Known Exploited catalog?
+    3. Automatable       - Can an adversary automate all exploitation steps?
+    4. Technical Impact  - Does exploitation yield partial or total system control?
 
-Usage:
-  # Look up one or more specific CVEs
-  python3 bod2604_lookup.py CVE-2023-45727
-  python3 bod2604_lookup.py CVE-2021-44228 CVE-2023-34362
+DATA SOURCES (No API keys required for base functionality)
+    CVE Records:    https://github.com/CVEProject/cvelistV5
+    Recent Deltas:  .../cvelistV5/main/cves/deltaLog.json (rolling 30-day history)
 
-  # Pull CVEs published/updated in the last N hours (default: 24)
-  python3 bod2604_lookup.py --recent
-  python3 bod2604_lookup.py --recent --hours 48
+ENVIRONMENT VARIABLES
+    If using the optional --tenable flag, the following variables must be exported:
+    TENABLE_HOST         - The IP or hostname of your Tenable.sc instance
+    TENABLE_ACCESS_KEY   - Tenable API access key
+    TENABLE_SECRET_KEY   - Tenable API secret key
 
-  # Recent, but only show KEV entries (much smaller result set)
-  python3 bod2604_lookup.py --recent --kev-only
+EXAMPLES
+    Lookup specific CVEs:
+        python3 bod2604_lookup.py CVE-2023-45727
+        python3 bod2604_lookup.py CVE-2021-44228 CVE-2023-34362
 
-  # Recent, cap results (sorted newest-first, then by severity)
-  python3 bod2604_lookup.py --recent --limit 20
+    Pull the latest updates from the last 24 hours:
+        python3 bod2604_lookup.py --recent
 
-  # Machine-readable JSON (pipe-friendly)
-  python3 bod2604_lookup.py --recent --kev-only --json | jq '.[] | {cve_id, timeline_if_exposed}'
+    Pull updates from the last 48 hours, but only show KEV entries:
+        python3 bod2604_lookup.py --recent --hours 48 --kev-only
 
-  # Feed CVE list from a file
-  cat cve_list.txt | xargs python3 bod2604_lookup.py
+    Pipe machine-readable JSON to jq:
+        python3 bod2604_lookup.py --recent --kev-only --json | jq '.[] | {cve_id, timeline_if_exposed}'
+
+    Feed a list of CVEs from a text file:
+        cat cve_list.txt | xargs python3 bod2604_lookup.py
 """
+
+__author__ = "Andrew Kapaldo"
+__copyright__ = "Copyright 2026, Wildwood Security"
+__license__ = "Apache v2.0"
+__version__ = "1.0.0"
+__maintainer__ = "Andrew Kapaldo"
+__status__ = "Production"
+
 
 import sys
+import os
 import json
 import re
 import argparse
 import urllib.request
 import urllib.error
+import concurrent.futures
 from datetime import datetime, timezone, timedelta
+
+
+try:
+    from tenable.sc import TenableSC
+    HAS_TENABLE = True
+except ImportError:
+    HAS_TENABLE = False
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -420,7 +447,7 @@ def print_summary_table(results: list[dict], c: bool = True) -> None:
 def main():
     parser = argparse.ArgumentParser(
         description="BOD 26-04 CVE Lookup — both Exposed / Not-Exposed timelines always shown",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=argparse.RawTextHelpFormatter,
         epilog=__doc__,
     )
     parser.add_argument("cve_ids", nargs="*", metavar="CVE-ID",
@@ -435,10 +462,14 @@ def main():
                         help="With --recent: cap results at N (sorted: KEV-first, then severity)")
     parser.add_argument("--json",     action="store_true",
                         help="Output raw JSON")
-    parser.add_argument("--summary",  action="store_true",
-                        help="Print a compact summary table (auto-enabled for 3+ CVEs)")
+    parser.add_argument("--full",     action="store_true",
+                        help="Print the full detailed output for each CVE")
     parser.add_argument("--no-color", action="store_true",
                         help="Disable ANSI color output")
+    parser.add_argument("--tenable", action="store_true",
+                        help="Pull active CVEs from Tenable.sc (requires 'pytenable' module)")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}",
+                        help="Show program's version number and exit")
     args = parser.parse_args()
 
     use_color = not args.no_color and sys.stdout.isatty()
@@ -458,14 +489,18 @@ def main():
             sys.exit(0)
 
         total_found = len(recent_entries)
-        print(f"  Found {total_found} CVE(s) — fetching details…", file=sys.stderr)
+        print(f"  Found {total_found} CVE(s) — fetching details concurrently…", file=sys.stderr)
 
-        results = []
-        for entry in recent_entries:
+        # Helper function for threading
+        def fetch_and_enrich(entry):
             r = lookup_cve(entry["cve_id"], github_url=entry.get("github_url", ""))
             r["_change_type"]  = entry["change_type"]
             r["_date_updated"] = entry["date_updated"]
-            results.append(r)
+            return r
+
+        # Fetch concurrently with up to 10 threads
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(fetch_and_enrich, recent_entries))
 
         if args.kev_only:
             results = [r for r in results if r.get("kev") == "YES"]
@@ -479,19 +514,64 @@ def main():
             results = results[:args.limit]
             print(f"  Capped at {args.limit} result(s) (KEV-first, then by severity).", file=sys.stderr)
 
+
+    # ── Tenable.sc mode ──────────────────────────────────────────────────────
+    if args.tenable:
+        if not HAS_TENABLE:
+            print("ERROR: Tenable integration requires the 'pytenable' library.", file=sys.stderr)
+            print("To use this feature: pip install pytenable", file=sys.stderr)
+            sys.exit(1)
+
+        # Retrieve environment variables
+        t_host = os.environ.get("TENABLE_HOST")
+        t_access = os.environ.get("TENABLE_ACCESS_KEY")
+        t_secret = os.environ.get("TENABLE_SECRET_KEY")
+
+        # Enforce that all required variables are present
+        if not all([t_host, t_access, t_secret]):
+            print(f"{RED}ERROR: Missing Tenable environment variables.{RST}", file=sys.stderr)
+            print("You must set TENABLE_HOST, TENABLE_ACCESS_KEY, and TENABLE_SECRET_KEY.", file=sys.stderr)
+            print(f"{DIM}Example: export TENABLE_ACCESS_KEY='your_key'{RST}", file=sys.stderr)
+            sys.exit(1)
+
+        print(f"  Connecting to Tenable.sc at {t_host}...", file=sys.stderr)
+        
+        try:
+            # Initialize the connection using the environment variables
+            sc = TenableSC(t_host)
+            sc.login(access_key=t_access, secret_key=t_secret)
+            
+            print("  Querying for active High/Critical vulnerabilities...", file=sys.stderr)
+            vulns = sc.analysis.vulns(('severity', '=', '4,3'), ('cveID', '=', '*CVE-*'))
+            
+            unique_cves = set()
+            for vuln in vulns:
+                if 'cve' in vuln:
+                    for cve in vuln['cve'].split(','):
+                        cve = cve.strip().upper()
+                        if cve.startswith('CVE-'):
+                            unique_cves.add(cve)
+                            
+            # Convert the set to a list and assign to args.cve_ids so the explicit mode handles it
+            args.cve_ids = list(unique_cves)
+            print(f"  Found {len(args.cve_ids)} unique CVE(s) in Tenable.sc.", file=sys.stderr)
+            
+        except Exception as e:
+            print(f"{RED}Tenable API Error: {e}{RST}", file=sys.stderr)
+            sys.exit(1)
+            
+
+
     # ── Explicit CVE mode ────────────────────────────────────────────────────
     else:
-        results = []
-        for cve_id in args.cve_ids:
-            cve_id = cve_id.strip()
-            if not cve_id:
-                continue
-            print(f"  Fetching {cve_id}…", file=sys.stderr)
-            results.append(lookup_cve(cve_id))
-
-    if not results:
-        print("No results.", file=sys.stderr)
-        sys.exit(0)
+        cve_list = [c.strip() for c in args.cve_ids if c.strip()]
+        if not cve_list:
+            print("No results.", file=sys.stderr)
+            sys.exit(0)
+            
+        print(f"  Fetching {len(cve_list)} CVE(s) concurrently…", file=sys.stderr)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(lookup_cve, cve_list))
 
     # ── Output ───────────────────────────────────────────────────────────────
     if args.json:
@@ -504,10 +584,13 @@ def main():
             ct = r["_change_type"].upper()
             dt = r.get("_date_updated", "")
             r["state"] = r.get("state", "N/A") + f" · {ct} {dt}"
-        print_result(r, c=use_color)
+            
+        # Only print the verbose details if the switch is used
+        if args.full:
+            print_result(r, c=use_color)
 
-    if len(results) > 1 or args.summary:
-        print_summary_table(results, c=use_color)
+    # Always print the summary table 
+    print_summary_table(results, c=use_color)
 
     urgent = any(
         "3 DAYS" in r.get("timeline_if_exposed", "") 
