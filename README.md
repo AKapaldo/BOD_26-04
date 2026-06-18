@@ -1,15 +1,19 @@
 <a id="readme-top"></a>
 
+<div align="center">
+  
 [![Contributors][contributors-shield]][contributors-url]
 [![Forks][forks-shield]][forks-url]
 [![Stargazers][stars-shield]][stars-url]
 [![Issues][issues-shield]][issues-url]
 [![MIT License][license-shield]][license-url]
 
+</div>
+
 <br />
 <div align="center">
   <a href="https://github.com/AKapaldo/BOD_26-04">
-    <img src="images/logo.png" alt="Wildwood Security Logo" width="80" height="80">
+    <img width="200" height="160" alt="Wildwood Security Logo" src="https://github.com/user-attachments/assets/148f76d6-7266-41b3-97ae-044fde0122ac" />
   </a>
 
 <h3 align="center">BOD 26-04 CVE Lookup Tool</h3>
