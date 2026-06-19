@@ -31,6 +31,10 @@ ENVIRONMENT VARIABLES
     TENABLE_ACCESS_KEY   - Tenable API access key
     TENABLE_SECRET_KEY   - Tenable API secret key
 
+OPTIONAL DEPENDENCIES
+    pytenable   - Required for --tenable     (pip install pytenable)
+    argcomplete - Shell tab completion        (pip install argcomplete)
+
 EXAMPLES
     Lookup specific CVEs:
         python3 bod2604_lookup.py CVE-2023-45727
@@ -47,14 +51,17 @@ EXAMPLES
 
     Feed a list of CVEs from a text file:
         cat cve_list.txt | xargs python3 bod2604_lookup.py
+
+    Pull active High/Critical CVEs from Tenable.sc and assess them:
+        python3 bod2604_lookup.py --tenable
 """
 
-__author__ = "Andrew Kapaldo"
-__copyright__ = "Copyright 2026, Wildwood Security"
-__license__ = "Apache v2.0"
-__version__ = "1.0.0"
+__author__     = "Andrew Kapaldo"
+__copyright__  = "Copyright 2026, Wildwood Security"
+__license__    = "Apache v2.0"
+__version__    = "1.1.0"
 __maintainer__ = "Andrew Kapaldo"
-__status__ = "Production"
+__status__     = "Production"
 
 
 import sys
@@ -88,8 +95,9 @@ RAW_CVE_BASE  = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cve
 DELTA_LOG_URL = "https://raw.githubusercontent.com/CVEProject/cvelistV5/main/cves/deltaLog.json"
 ALLOWED_URL_PREFIXES = ("https://raw.githubusercontent.com/CVEProject/",)
 
-FETCH_TIMEOUT   = 20   # seconds per individual HTTP request
-FETCH_WORKERS   = 10   # max concurrent CVE fetches
+FETCH_TIMEOUT     = 20   # seconds per individual HTTP request
+FETCH_WORKERS     = 10   # max concurrent CVE fetches
+FETCH_MAP_TIMEOUT = 300  # seconds for the entire concurrent batch
 
 BOLD = "\033[1m"
 RED  = "\033[91m"
@@ -119,9 +127,16 @@ def cve_url(cve_id: str) -> str:
 # ---------------------------------------------------------------------------
 
 def fetch_json(url: str) -> dict | list:
+    """
+    Fetch and parse JSON from an HTTPS URL.
+
+    The URL is validated against ALLOWED_URL_PREFIXES before a Request object
+    is constructed — the only point at which the check is meaningful.
+    Checking req.full_url after construction provides no security benefit.
+    """
     if not any(url.startswith(p) for p in ALLOWED_URL_PREFIXES):
         raise ValueError(f"URL not in allowlist: {url}")
- 
+
     req = urllib.request.Request(
         url,
         headers={"User-Agent": f"BOD26-04-Lookup/{__version__} (security research)"},
@@ -130,12 +145,20 @@ def fetch_json(url: str) -> dict | list:
         return json.loads(resp.read().decode("utf-8"))
 
 
-
 def fetch_recent_cve_ids(hours: int = 24) -> list[dict]:
+    """
+    Return CVE entries from deltaLog.json published/updated within the last N hours.
+    Each entry: {cve_id, github_url, date_updated, change_type}.
+    Deduplicated and sorted newest-first.
+
+    githubLink values from the delta log are validated against ALLOWED_URL_PREFIXES
+    at storage time so that any hostile URL is discarded before it can reach fetch_json().
+    Invalid links fall back to cve_url() reconstruction at lookup time.
+    """
     cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
     log    = fetch_json(DELTA_LOG_URL)
 
-    seen = {}
+    seen: dict[str, dict] = {}
     for snapshot in log:
         for change_type in ("new", "updated"):
             for entry in snapshot.get(change_type, []):
@@ -146,11 +169,15 @@ def fetch_recent_cve_ids(hours: int = 24) -> list[dict]:
                     continue
                 if dt < cutoff:
                     continue
-                cve_id = entry["cveId"]
+                cve_id  = entry["cveId"]
+                gh_link = entry.get("githubLink", "")
+               
+                if gh_link and not any(gh_link.startswith(p) for p in ALLOWED_URL_PREFIXES):
+                    gh_link = ""
                 if cve_id not in seen or dt > seen[cve_id]["_dt"]:
                     seen[cve_id] = {
                         "cve_id":       cve_id,
-                        "github_url":   entry.get("githubLink", ""),
+                        "github_url":   gh_link,
                         "date_updated": dt_str[:19].replace("T", " ") + " UTC",
                         "change_type":  change_type,
                         "_dt":          dt,
@@ -160,6 +187,42 @@ def fetch_recent_cve_ids(hours: int = 24) -> list[dict]:
     for r in results:
         del r["_dt"]
     return results
+
+# ---------------------------------------------------------------------------
+# Tenable.sc helpers
+# ---------------------------------------------------------------------------
+
+def get_tenable_cves(host: str, access_key: str, secret_key: str) -> list[str]:
+    """
+    Connect to Tenable.sc and return a deduplicated, sorted list of CVE IDs
+    found in active High/Critical vulnerabilities.
+
+    Only the cveID field is requested to minimise data transfer. Each value
+    is validated against the CVE ID regex before inclusion so that malformed
+    or empty fields don't propagate downstream.
+    """
+    sc = TenableSC(host, access_key=access_key, secret_key=secret_key)
+    unique_cves: set[str] = set()
+    try:
+        vulns = sc.analysis.vulns(
+            ('severity', '=', '4,3'),
+            fields=['cveID'],
+        )
+        for vuln in vulns:
+            # pytenable may return the field as 'cveID' or 'cve' depending on the plugin and API version. Checking both.
+            raw = vuln.get('cveID') or vuln.get('cve') or ""
+            for cve in re.split(r'[,\s]+', raw):
+                cve = cve.strip().upper()
+                if re.fullmatch(r"CVE-\d{4}-\d{4,}", cve):
+                    unique_cves.add(cve)
+    finally:
+        if hasattr(sc, 'logout'):
+            try:
+                sc.logout()
+            except Exception:
+                pass
+
+    return sorted(unique_cves)
 
 # ---------------------------------------------------------------------------
 # CVE JSON parsers
@@ -257,21 +320,21 @@ def bod_timeline(kev: str, exposed: bool, automatable: str, tech_impact: str) ->
     t = tech_impact.lower() == "total"
 
     if e and k and a and t: return "3 DAYS & FORENSIC TRIAGE", "KEV + Exposed + Automatable + Total Impact"
-    if e and k and a: return "3 DAYS", "KEV + Exposed + Automatable"
-    if e and k and t: return "3 DAYS & FORENSIC TRIAGE", "KEV + Exposed + Total Impact"
-    if e and k: return "14 DAYS", "KEV + Exposed"
-    if e and a and t: return "3 DAYS", "Exposed + Automatable + Total Impact (not KEV)"
-    if e and (a or t): return "30 DAYS", "Exposed + Automatable OR Total Impact (not KEV)"
-    if e: return "60 DAYS", "Exposed"
-    if k and a and t: return "3 DAYS & FORENSIC TRIAGE", "KEV + Automatable + Total Impact"
-    if k and (a or t): return "14 DAYS", "KEV + Automatable OR Total Impact"
-    if k: return "14 DAYS", "KEV — asset not publicly exposed"
-    if a and t: return "60 DAYS", "Automatable + Total Impact"
-    if a: return "60 DAYS", "Automatable"
-    return "FIX ON SYSTEM UPGRADE", "Does not meet accelerated criteria"
+    if e and k and a:        return "3 DAYS",                  "KEV + Exposed + Automatable"
+    if e and k and t:        return "3 DAYS & FORENSIC TRIAGE","KEV + Exposed + Total Impact"
+    if e and k:              return "14 DAYS",                 "KEV + Exposed"
+    if e and a and t:        return "3 DAYS",                  "Exposed + Automatable + Total Impact (not KEV)"
+    if e and (a or t):       return "30 DAYS",                 "Exposed + Automatable OR Total Impact (not KEV)"
+    if e:                    return "60 DAYS",                 "Exposed"
+    if k and a and t:        return "3 DAYS & FORENSIC TRIAGE","KEV + Automatable + Total Impact"
+    if k and (a or t):       return "14 DAYS",                 "KEV + Automatable OR Total Impact"
+    if k:                    return "14 DAYS",                 "KEV — asset not publicly exposed"
+    if a and t:              return "60 DAYS",                 "Automatable + Total Impact"
+    if a:                    return "60 DAYS",                 "Automatable"
+    return "FIX ON SYSTEM UPGRADE",                            "Does not meet accelerated criteria"
 
 # ---------------------------------------------------------------------------
-# Main lookup
+# Main CVE lookup
 # ---------------------------------------------------------------------------
 
 def lookup_cve(cve_id: str, github_url: str = "") -> dict:
@@ -328,22 +391,30 @@ def lookup_cve(cve_id: str, github_url: str = "") -> dict:
         "error":                   None,
     }
 
+
+def fetch_and_enrich(entry: dict) -> dict:
+    """Module-level wrapper for concurrent CVE fetches from delta log entries."""
+    r = lookup_cve(entry["cve_id"], github_url=entry.get("github_url", ""))
+    r["_change_type"]  = entry["change_type"]
+    r["_date_updated"] = entry["date_updated"]
+    return r
+
 # ---------------------------------------------------------------------------
 # Color helpers
 # ---------------------------------------------------------------------------
 
-def c_sev(s: str)  -> str:
+def c_sev(s: str) -> str:
     m = {"CRITICAL": f"{RED}{BOLD}", "HIGH": RED, "MEDIUM": YEL, "LOW": GRN}
     return f"{m.get(s.upper(), '')}{s}{RST}" if s.upper() in m else s
 
-def c_yn(v: str)   -> str:
+def c_yn(v: str) -> str:
     return f"{RED}YES{RST}" if v.upper() == "YES" else (f"{GRN}NO{RST}" if v.upper() == "NO" else v)
 
 def c_tl(t: str) -> str:
-    if "3 DAYS"   in t: return f"{RED}{BOLD}{t}{RST}"
-    if "14 DAYS"  in t: return f"{YEL}{t}{RST}"
-    if "30 DAYS"  in t: return f"{YEL}{t}{RST}"
-    if "60 DAYS"  in t: return f"{GRN}{t}{RST}"
+    if "3 DAYS"  in t: return f"{RED}{BOLD}{t}{RST}"
+    if "14 DAYS" in t: return f"{YEL}{t}{RST}"
+    if "30 DAYS" in t: return f"{YEL}{t}{RST}"
+    if "60 DAYS" in t: return f"{GRN}{t}{RST}"
     return f"{GRN}{t}{RST}"
 
 def c_tech(v: str) -> str:
@@ -394,7 +465,7 @@ def print_result(r: dict, c: bool = True) -> None:
     print()
     print(_section("BOD 26-04 REMEDIATION TIMELINES", c))
 
-    def tl_row(label, tl, reason):
+    def tl_row(label: str, tl: str, reason: str) -> None:
         tl_d = c_tl(tl) if c else tl
         rea  = f"  {DIM}{reason}{RST}" if c else f"  {reason}"
         print(_field(label, f"{tl_d}{rea}", c))
@@ -433,29 +504,31 @@ def print_summary_table(results: list[dict], c: bool = True) -> None:
     print(f"\n{BOLD}BOD 26-04 Summary{RST}\n{sep}" if c else f"\nBOD 26-04 Summary\n{sep}")
     print(hdr)
     print(sep)
-    
+
     for r in results:
         if r.get("error"):
             print(f"{r['cve_id']:<20} ERROR: {r['error']}")
             continue
-            
+
+        tl_exp   = r["timeline_if_exposed"]
+        tl_unexp = r["timeline_if_not_exposed"]
+
         row = (f"{r['cve_id']:<20} {r['kev']:<5} {r['automatable']:<5} "
                f"{r['technical_impact']:<9} {r['severity']:<9} "
-               f"{r['timeline_if_exposed']:<26} {r['timeline_if_not_exposed']:<26}")
+               f"{tl_exp:<26} {tl_unexp:<26}")
         if c:
-            tl = r["timeline_if_exposed"]
-            if   "3 DAYS"  in tl: row = f"{RED}{BOLD}{row}{RST}"
-            elif "14 DAYS" in tl: row = f"{YEL}{row}{RST}"
-            elif "30 DAYS" in tl: row = f"{YEL}{row}{RST}"
+            if   "3 DAYS"  in tl_exp: row = f"{RED}{BOLD}{row}{RST}"
+            elif "14 DAYS" in tl_exp: row = f"{YEL}{row}{RST}"
+            elif "30 DAYS" in tl_exp: row = f"{YEL}{row}{RST}"
         print(row)
-        
+
     print(sep + "\n")
 
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="BOD 26-04 CVE Lookup — both Exposed / Not-Exposed timelines always shown",
         formatter_class=argparse.RawTextHelpFormatter,
@@ -477,19 +550,23 @@ def main():
                         help="Print the full detailed output for each CVE")
     parser.add_argument("--no-color", action="store_true",
                         help="Disable ANSI color output")
-    parser.add_argument("--tenable", action="store_true",
-                        help="Pull active CVEs from Tenable.sc (requires 'pytenable' module)")
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}",
-                        help="Show program's version number and exit")
+    parser.add_argument("--tenable",  action="store_true",
+                        help="Pull active High/Critical CVEs from Tenable.sc\n"
+                             "(requires pytenable: pip install pytenable)")
+    parser.add_argument("--version",  action="version", version=f"%(prog)s {__version__}")
+
     if HAS_ARGCOMPLETE:
         argcomplete.autocomplete(parser)
 
-    args = parser.parse_args()
-
+    args      = parser.parse_args()
     use_color = not args.no_color and sys.stdout.isatty()
 
-    # ── 1. Tenable.sc mode ───────────────────────────────────────────────────
-    # If Tenable is used, get the CVEs and add them to args.cve_ids so explicit mode can use them below.
+    # cve_list aggregates IDs from all sources (CLI args, Tenable, recent delta).
+    # Initialised here so all branches below can safely read it.
+    cve_list:    list[str]       = list(args.cve_ids)
+    recent_meta: dict[str, dict] = {}  # cve_id → {change_type, date_updated, github_url}
+
+    # ── 1. Tenable.sc source ─────────────────────────────────────────────────
     if args.tenable:
         if not HAS_TENABLE:
             print(f"{RED}ERROR: --tenable requires the 'pytenable' library.{RST}", file=sys.stderr)
@@ -500,7 +577,7 @@ def main():
         t_access = os.environ.get("TENABLE_ACCESS_KEY", "")
         t_secret = os.environ.get("TENABLE_SECRET_KEY", "")
         missing  = [k for k, v in [
-            ("TENABLE_HOST", t_host),
+            ("TENABLE_HOST",       t_host),
             ("TENABLE_ACCESS_KEY", t_access),
             ("TENABLE_SECRET_KEY", t_secret),
         ] if not v]
@@ -509,50 +586,85 @@ def main():
             print(f"{RED}ERROR: Missing environment variable(s): {', '.join(missing)}{RST}", file=sys.stderr)
             sys.exit(1)
 
+        print(f"  Connecting to Tenable.sc at {t_host}…", file=sys.stderr)
         try:
             tsc_cves = get_tenable_cves(t_host, t_access, t_secret)
             print(f"  Found {len(tsc_cves)} unique CVE(s) in Tenable.sc.", file=sys.stderr)
-            # Merge, preserving any CVEs already specified on the command line
             existing = set(c.upper() for c in cve_list)
             cve_list.extend(c for c in tsc_cves if c not in existing)
         except Exception as e:
             print(f"{RED}Tenable error: {e}{RST}", file=sys.stderr)
-            # Non-fatal if CVEs were also supplied on the CLI; fatal otherwise
             if not cve_list:
                 sys.exit(1)
             print("  Continuing with CLI-supplied CVEs only.", file=sys.stderr)
 
-
-    # ── 2. Recent mode ───────────────────────────────────────────────────────
-    # Run this if explicitly requested, OR if no CVE IDs were provided at all.
-    if args.recent or not args.cve_ids:
+    # ── 2. Recent delta source ───────────────────────────────────────────────
+    # Runs when explicitly requested OR when no CVEs have been collected yet.
+    # Running alongside --tenable merges both result sets rather than one
+    # silently overriding the other.
+    
+    if args.recent or not cve_list:
         hours = args.hours
         print(f"  Fetching CVEs from the last {hours}h via deltaLog.json…", file=sys.stderr)
         try:
             recent_entries = fetch_recent_cve_ids(hours)
         except Exception as e:
-            print(f"ERROR: {e}", file=sys.stderr)
-            sys.exit(2)
+            print(f"ERROR fetching delta log: {e}", file=sys.stderr)
+            if not cve_list:
+                sys.exit(2)
+            print("  Continuing with already-collected CVEs.", file=sys.stderr)
+            recent_entries = []
 
-        if not recent_entries:
+        if recent_entries:
+            print(f"  Found {len(recent_entries)} CVE(s) in delta log.", file=sys.stderr)
+            existing = set(cve_list)
+            for entry in recent_entries:
+                cid = entry["cve_id"]
+                if cid not in existing:
+                    cve_list.append(cid)
+                    existing.add(cid)
+                # Store metadata for all recent entries (including pre-existing) so the change type/date annotation works regardless of order.
+                recent_meta[cid] = {
+                    "change_type":  entry["change_type"],
+                    "date_updated": entry["date_updated"],
+                    "github_url":   entry.get("github_url", ""),
+                }
+        elif not cve_list:
             print(f"No CVEs found in the last {hours} hour(s).", file=sys.stderr)
             sys.exit(0)
 
-        total_found = len(recent_entries)
-        print(f"  Found {total_found} CVE(s) — fetching details concurrently…", file=sys.stderr)
+    if not cve_list:
+        print("No CVE IDs to process.", file=sys.stderr)
+        sys.exit(0)
 
-        def fetch_and_enrich(entry):
-            r = lookup_cve(entry["cve_id"], github_url=entry.get("github_url", ""))
-            r["_change_type"]  = entry["change_type"]
-            r["_date_updated"] = entry["date_updated"]
-            return r
+    # ── 3. Fetch all CVEs concurrently ───────────────────────────────────────
+    print(f"  Fetching {len(cve_list)} CVE(s) concurrently…", file=sys.stderr)
 
-        with concurrent.futures.ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
-            results = list(executor.map(fetch_and_enrich, recent_entries))
+    def make_entry(cve_id: str) -> dict:
+        """Build a delta-style entry dict for CVEs not sourced from the delta log."""
+        meta = recent_meta.get(cve_id, {})
+        return {
+            "cve_id":       cve_id,
+            "github_url":   meta.get("github_url", ""),
+            "change_type":  meta.get("change_type", ""),
+            "date_updated": meta.get("date_updated", ""),
+        }
 
+    entries = [make_entry(cid) for cid in cve_list]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
+        try:
+            results = list(executor.map(fetch_and_enrich, entries, timeout=FETCH_MAP_TIMEOUT))
+        except concurrent.futures.TimeoutError:
+            print(f"{RED}ERROR: Batch fetch timed out after {FETCH_MAP_TIMEOUT}s.{RST}", file=sys.stderr)
+            sys.exit(2)
+
+    # ── 4. Filter / sort (only meaningful when --recent or --tenable sourced) ─
+    if args.recent or args.tenable:
         if args.kev_only:
+            before  = len(results)
             results = [r for r in results if r.get("kev") == "YES"]
-            print(f"  KEV filter: {len(results)} of {total_found} are in the KEV catalog.", file=sys.stderr)
+            print(f"  KEV filter: {len(results)} of {before} are in the KEV catalog.", file=sys.stderr)
 
         if args.limit and len(results) > args.limit:
             results.sort(key=lambda r: (
@@ -562,39 +674,28 @@ def main():
             results = results[:args.limit]
             print(f"  Capped at {args.limit} result(s) (KEV-first, then by severity).", file=sys.stderr)
 
-    # ── 3. Explicit CVE mode ─────────────────────────────────────────────────
-    # Run this if CVE IDs exist (either from CLI args or Tenable API)
-    else:
-        cve_list = [c.strip() for c in args.cve_ids if c.strip()]
-        if not cve_list:
-            print("No results.", file=sys.stderr)
-            sys.exit(0)
-            
-        print(f"  Fetching {len(cve_list)} CVE(s) concurrently…", file=sys.stderr)
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-            results = list(executor.map(lookup_cve, cve_list))
+    if not results:
+        print("No results.", file=sys.stderr)
+        sys.exit(0)
 
-    # ── Output ───────────────────────────────────────────────────────────────
+    # ── 5. Output ─────────────────────────────────────────────────────────────
     if args.json:
         clean = [{k: v for k, v in r.items() if not k.startswith("_")} for r in results]
         print(json.dumps(clean, indent=2))
         return
 
     for r in results:
-        if "_change_type" in r:
-            ct = r["_change_type"].upper()
-            dt = r.get("_date_updated", "")
-            r["state"] = r.get("state", "N/A") + f" · {ct} {dt}"
-            
-        # Only print the verbose details if the switch is used
+        ct = r.get("_change_type", "")
+        dt = r.get("_date_updated", "")
+        if ct and dt:
+            r["state"] = r.get("state", "N/A") + f" · {ct.upper()} {dt}"
         if args.full:
             print_result(r, c=use_color)
 
-    # Always print the summary table 
     print_summary_table(results, c=use_color)
 
     urgent = any(
-        "3 DAYS" in r.get("timeline_if_exposed", "") 
+        "3 DAYS" in r.get("timeline_if_exposed", "")
         for r in results if not r.get("error")
     )
     sys.exit(1 if urgent else 0)
