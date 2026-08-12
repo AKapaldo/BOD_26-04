@@ -324,7 +324,7 @@ def bod_timeline(kev: str, exposed: bool, automatable: str, tech_impact: str) ->
     if e and k and t:        return "3 DAYS & FORENSIC TRIAGE","KEV + Exposed + Total Impact"
     if e and k:              return "14 DAYS",                 "KEV + Exposed"
     if e and a and t:        return "3 DAYS",                  "Exposed + Automatable + Total Impact (not KEV)"
-    if e and (a or t):       return "30 DAYS",                 "Exposed + Automatable OR Total Impact (not KEV)"
+    if e and (a or t):       return "14 DAYS",                 "Exposed + Automatable OR Total Impact (not KEV)"
     if e:                    return "60 DAYS",                 "Exposed"
     if k and a and t:        return "3 DAYS & FORENSIC TRIAGE","KEV + Automatable + Total Impact"
     if k and (a or t):       return "14 DAYS",                 "KEV + Automatable OR Total Impact"
