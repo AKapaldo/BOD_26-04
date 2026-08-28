@@ -59,7 +59,7 @@ EXAMPLES
 __author__     = "Andrew Kapaldo"
 __copyright__  = "Copyright 2026, Wildwood Security"
 __license__    = "Apache v2.0"
-__version__    = "1.1.0"
+__version__    = "1.2.0"
 __maintainer__ = "Andrew Kapaldo"
 __status__     = "Production"
 
@@ -72,6 +72,7 @@ import argparse
 import urllib.request
 import urllib.error
 import concurrent.futures
+import functools
 from datetime import datetime, timezone, timedelta
 
 
@@ -337,7 +338,7 @@ def bod_timeline(kev: str, exposed: bool, automatable: str, tech_impact: str) ->
 # Main CVE lookup
 # ---------------------------------------------------------------------------
 
-def lookup_cve(cve_id: str, github_url: str = "") -> dict:
+def lookup_cve(cve_id: str, github_url: str = "", assume_kev: bool = False) -> dict:
     cve_id = cve_id.strip().upper()
     url    = github_url or cve_url(cve_id)
 
@@ -361,6 +362,11 @@ def lookup_cve(cve_id: str, github_url: str = "") -> dict:
 
     cvss     = parse_cvss(all_metrics)
     ssvc_kev = parse_ssvc_and_kev(adp_list)
+
+    if assume_kev and ssvc_kev["kev"] == "NO":
+        ssvc_kev["kev"] = "YES"
+        ssvc_kev["kev_date_added"] = "Assumed"
+        ssvc_kev["kev_reference"] = "N/A"
 
     tl_exp,   r_exp   = bod_timeline(ssvc_kev["kev"], True,  ssvc_kev["automatable"], ssvc_kev["technical_impact"])
     tl_unexp, r_unexp = bod_timeline(ssvc_kev["kev"], False, ssvc_kev["automatable"], ssvc_kev["technical_impact"])
@@ -392,9 +398,9 @@ def lookup_cve(cve_id: str, github_url: str = "") -> dict:
     }
 
 
-def fetch_and_enrich(entry: dict) -> dict:
+def fetch_and_enrich(entry: dict, assume_kev: bool = False) -> dict:
     """Module-level wrapper for concurrent CVE fetches from delta log entries."""
-    r = lookup_cve(entry["cve_id"], github_url=entry.get("github_url", ""))
+    r = lookup_cve(entry["cve_id"], github_url=entry.get("github_url", ""), assume_kev=assume_kev)
     r["_change_type"]  = entry["change_type"]
     r["_date_updated"] = entry["date_updated"]
     return r
@@ -554,6 +560,7 @@ def main() -> None:
                         help="Pull active High/Critical CVEs from Tenable.sc\n"
                              "(requires pytenable: pip install pytenable)")
     parser.add_argument("--version",  action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument("--assume-kev",  action="store_true", help="Treat all CVEs as KEV ")
 
     if HAS_ARGCOMPLETE:
         argcomplete.autocomplete(parser)
@@ -652,9 +659,10 @@ def main() -> None:
 
     entries = [make_entry(cid) for cid in cve_list]
 
+    fetch_fn = functools.partial(fetch_and_enrich, assume_kev=args.assume_kev)
     with concurrent.futures.ThreadPoolExecutor(max_workers=FETCH_WORKERS) as executor:
         try:
-            results = list(executor.map(fetch_and_enrich, entries, timeout=FETCH_MAP_TIMEOUT))
+            results = list(executor.map(fetch_fn, entries, timeout=FETCH_MAP_TIMEOUT))
         except concurrent.futures.TimeoutError:
             print(f"{RED}ERROR: Batch fetch timed out after {FETCH_MAP_TIMEOUT}s.{RST}", file=sys.stderr)
             sys.exit(2)
