@@ -127,3 +127,103 @@ The three server-side variables (KEV, Automatable, Technical Impact) are publish
    ```sh
    git clone [https://github.com/AKapaldo/BOD_26-04.git](https://github.com/AKapaldo/BOD_26-04.git)
    cd BOD_26-04
+   ```
+2. (Mac/Linux) Make the Python script executable
+   ```sh
+   chmod +x bod_2604_lookup.py
+   ```
+
+## Usage
+
+> Note: The examples below use the Python script. If you are on Windows, simply replace python3 bod2604_lookup.py with .\bod2604_lookup.ps1 and use standard PowerShell -Parameter syntax instead of --flag syntax.
+
+### Look up specific CVEs
+
+```sh
+python3 bod2604_lookup.py CVE-2021-44228
+python3 bod2604_lookup.py CVE-2021-44228 CVE-2023-34362 CVE-2023-45727
+```
+
+### Assume KEV Status
+
+Assess a vulnerability as if it is in the KEV catalog, regardless of its current status:
+
+```sh
+python3 bod2604_lookup.py CVE-2024-1234 --assume-kev
+```
+
+### Pull recent CVEs
+
+```sh
+# CVEs published or updated in the last 24 hours (default)
+python3 bod2604_lookup.py --recent
+
+# Custom time window
+python3 bod2604_lookup.py --recent --hours 6
+
+# Only show entries already in the KEV catalog
+python3 bod2604_lookup.py --recent --kev-only
+
+# Cap results at 20, sorted KEV-first then by severity
+python3 bod2604_lookup.py --recent --limit 20
+```
+
+### JSON Output
+
+```sh
+# Full JSON for all results
+python3 bod2604_lookup.py CVE-2021-44228 --json
+
+# Extract just the decision fields via jq
+python3 bod2604_lookup.py --recent --kev-only --json \
+  | jq '.[] | {cve_id, kev, automatable, technical_impact, timeline_if_exposed}'
+```
+
+## Data Sources & Schema
+
+| Source | URL | Notes |
+|--------|-----|-------|
+CVE JSON 5 records | raw.githubusercontent.com/CVEProject/cvelistV5 | authoritative CVE data including CISA Vulnrichment ADP container|
+Delta log| `.../cves/deltaLog.json` | Rolling 30-day log of hourly changes; used by `--recent` | 
+
+All data is fetched at runtime. No local database, no caching.
+
+> [!Note]
+> SSVC enrichment (Automatable, Technical Impact) is provided by CISA for a growing subset of CVEs.
+> Records without enrichment will show N/A for those fields, and the timeline will reflect what can be computed from the available data.
+
+## Contributing
+
+Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are greatly appreciated.
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
+
+## License
+
+Distributed under the Apache V2.0 License. See `LICENSE.txt` for more information.
+
+## Contact
+
+Andrew Kapaldo - Wildwood Security
+
+Project Link: [https://github.com/AKapaldo/BOD_26-04](https://github.com/AKapaldo/BOD_26-04) 
+
+
+[contributors-shield]: https://img.shields.io/github/contributors/AKapaldo/BOD_26-04.svg?style=for-the-badge
+[contributors-url]: https://github.com/AKapaldo/BOD_26-04/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/AKapaldo/BOD_26-04.svg?style=for-the-badge
+[forks-url]: https://github.com/AKapaldo/BOD_26-04/network/members
+[stars-shield]: https://img.shields.io/github/stars/AKapaldo/BOD_26-04.svg?style=for-the-badge
+[stars-url]: https://github.com/AKapaldo/BOD_26-04/stargazers
+[issues-shield]: https://img.shields.io/github/issues/AKapaldo/BOD_26-04.svg?style=for-the-badge
+[issues-url]: https://github.com/AKapaldo/BOD_26-04/issues
+[license-shield]: https://img.shields.io/badge/License-Apache_2.0-blue.svg?style=for-the-badge
+[license-url]: https://opensource.org/licenses/Apache-2.0
+[Python-shield]: https://img.shields.io/badge/Python-3776AB?style=for-the-badge&logo=python&logoColor=white
+[Python-url]: https://python.org/ 
+[PowerShell-url]: https://learn.microsoft.com/en-us/powershell/
+[PowerShell-shield]: https://img.shields.io/badge/PowerShell-2B4A6E?style=for-the-badge&logo=powershell&logoColor=white
