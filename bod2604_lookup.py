@@ -32,7 +32,6 @@ ENVIRONMENT VARIABLES
     TENABLE_SECRET_KEY   - Tenable API secret key
 
 OPTIONAL DEPENDENCIES
-    pytenable   - Required for --tenable     (pip install pytenable)
     argcomplete - Shell tab completion        (pip install argcomplete)
 
 EXAMPLES
@@ -45,6 +44,9 @@ EXAMPLES
 
     Pull updates from the last 48 hours, but only show KEV entries:
         python3 bod2604_lookup.py --recent --hours 48 --kev-only
+    
+    Assume the provided CVEs are KEV, regardless of actual status - useful for assessing KEVs before the Vulnrichment Database has updated:
+            python3 bod2604_lookup.py CVE-2024-1234 --assume-kev
 
     Pipe machine-readable JSON to jq:
         python3 bod2604_lookup.py --recent --kev-only --json | jq '.[] | {cve_id, timeline_if_exposed}'
@@ -52,8 +54,6 @@ EXAMPLES
     Feed a list of CVEs from a text file:
         cat cve_list.txt | xargs python3 bod2604_lookup.py
 
-    Pull active High/Critical CVEs from Tenable.sc and assess them:
-        python3 bod2604_lookup.py --tenable
 """
 
 __author__     = "Andrew Kapaldo"
@@ -75,12 +75,6 @@ import concurrent.futures
 import functools
 from datetime import datetime, timezone, timedelta
 
-
-try:
-    from tenable.sc import TenableSC
-    HAS_TENABLE = True
-except ImportError:
-    HAS_TENABLE = False
 
 try:
     import argcomplete
@@ -189,41 +183,6 @@ def fetch_recent_cve_ids(hours: int = 24) -> list[dict]:
         del r["_dt"]
     return results
 
-# ---------------------------------------------------------------------------
-# Tenable.sc helpers
-# ---------------------------------------------------------------------------
-
-def get_tenable_cves(host: str, access_key: str, secret_key: str) -> list[str]:
-    """
-    Connect to Tenable.sc and return a deduplicated, sorted list of CVE IDs
-    found in active High/Critical vulnerabilities.
-
-    Only the cveID field is requested to minimise data transfer. Each value
-    is validated against the CVE ID regex before inclusion so that malformed
-    or empty fields don't propagate downstream.
-    """
-    sc = TenableSC(host, access_key=access_key, secret_key=secret_key)
-    unique_cves: set[str] = set()
-    try:
-        vulns = sc.analysis.vulns(
-            ('severity', '=', '4,3'),
-            fields=['cveID'],
-        )
-        for vuln in vulns:
-            # pytenable may return the field as 'cveID' or 'cve' depending on the plugin and API version. Checking both.
-            raw = vuln.get('cveID') or vuln.get('cve') or ""
-            for cve in re.split(r'[,\s]+', raw):
-                cve = cve.strip().upper()
-                if re.fullmatch(r"CVE-\d{4}-\d{4,}", cve):
-                    unique_cves.add(cve)
-    finally:
-        if hasattr(sc, 'logout'):
-            try:
-                sc.logout()
-            except Exception:
-                pass
-
-    return sorted(unique_cves)
 
 # ---------------------------------------------------------------------------
 # CVE JSON parsers
@@ -556,11 +515,8 @@ def main() -> None:
                         help="Print the full detailed output for each CVE")
     parser.add_argument("--no-color", action="store_true",
                         help="Disable ANSI color output")
-    parser.add_argument("--tenable",  action="store_true",
-                        help="Pull active High/Critical CVEs from Tenable.sc\n"
-                             "(requires pytenable: pip install pytenable)")
     parser.add_argument("--version",  action="version", version=f"%(prog)s {__version__}")
-    parser.add_argument("--assume-kev",  action="store_true", help="Treat all CVEs as KEV ")
+    parser.add_argument("--assume-kev",  action="store_true", help="Treat all processed CVEs as if they are actively listed in the KEV catalog")
 
     if HAS_ARGCOMPLETE:
         argcomplete.autocomplete(parser)
@@ -568,47 +524,14 @@ def main() -> None:
     args      = parser.parse_args()
     use_color = not args.no_color and sys.stdout.isatty()
 
-    # cve_list aggregates IDs from all sources (CLI args, Tenable, recent delta).
+    # cve_list aggregates IDs from all sources (CLI args & recent delta).
     # Initialised here so all branches below can safely read it.
     cve_list:    list[str]       = list(args.cve_ids)
     recent_meta: dict[str, dict] = {}  # cve_id → {change_type, date_updated, github_url}
 
-    # ── 1. Tenable.sc source ─────────────────────────────────────────────────
-    if args.tenable:
-        if not HAS_TENABLE:
-            print(f"{RED}ERROR: --tenable requires the 'pytenable' library.{RST}", file=sys.stderr)
-            print("Install it with:  pip install pytenable", file=sys.stderr)
-            sys.exit(1)
 
-        t_host   = os.environ.get("TENABLE_HOST", "")
-        t_access = os.environ.get("TENABLE_ACCESS_KEY", "")
-        t_secret = os.environ.get("TENABLE_SECRET_KEY", "")
-        missing  = [k for k, v in [
-            ("TENABLE_HOST",       t_host),
-            ("TENABLE_ACCESS_KEY", t_access),
-            ("TENABLE_SECRET_KEY", t_secret),
-        ] if not v]
-
-        if missing:
-            print(f"{RED}ERROR: Missing environment variable(s): {', '.join(missing)}{RST}", file=sys.stderr)
-            sys.exit(1)
-
-        print(f"  Connecting to Tenable.sc at {t_host}…", file=sys.stderr)
-        try:
-            tsc_cves = get_tenable_cves(t_host, t_access, t_secret)
-            print(f"  Found {len(tsc_cves)} unique CVE(s) in Tenable.sc.", file=sys.stderr)
-            existing = set(c.upper() for c in cve_list)
-            cve_list.extend(c for c in tsc_cves if c not in existing)
-        except Exception as e:
-            print(f"{RED}Tenable error: {e}{RST}", file=sys.stderr)
-            if not cve_list:
-                sys.exit(1)
-            print("  Continuing with CLI-supplied CVEs only.", file=sys.stderr)
-
-    # ── 2. Recent delta source ───────────────────────────────────────────────
+    # ── 1. Recent delta source ───────────────────────────────────────────────
     # Runs when explicitly requested OR when no CVEs have been collected yet.
-    # Running alongside --tenable merges both result sets rather than one
-    # silently overriding the other.
     
     if args.recent or not cve_list:
         hours = args.hours
@@ -644,7 +567,7 @@ def main() -> None:
         print("No CVE IDs to process.", file=sys.stderr)
         sys.exit(0)
 
-    # ── 3. Fetch all CVEs concurrently ───────────────────────────────────────
+    # ── 2. Fetch all CVEs concurrently ───────────────────────────────────────
     print(f"  Fetching {len(cve_list)} CVE(s) concurrently…", file=sys.stderr)
 
     def make_entry(cve_id: str) -> dict:
@@ -667,8 +590,8 @@ def main() -> None:
             print(f"{RED}ERROR: Batch fetch timed out after {FETCH_MAP_TIMEOUT}s.{RST}", file=sys.stderr)
             sys.exit(2)
 
-    # ── 4. Filter / sort (only meaningful when --recent or --tenable sourced) ─
-    if args.recent or args.tenable:
+    # ── 4. Filter / sort (only meaningful when --recent sourced) ─
+    if args.recent:
         if args.kev_only:
             before  = len(results)
             results = [r for r in results if r.get("kev") == "YES"]
@@ -686,7 +609,7 @@ def main() -> None:
         print("No results.", file=sys.stderr)
         sys.exit(0)
 
-    # ── 5. Output ─────────────────────────────────────────────────────────────
+    # ── 4. Output ─────────────────────────────────────────────────────────────
     if args.json:
         clean = [{k: v for k, v in r.items() if not k.startswith("_")} for r in results]
         print(json.dumps(clean, indent=2))
