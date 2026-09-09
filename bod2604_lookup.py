@@ -25,12 +25,6 @@ DATA SOURCES (No API keys required for base functionality)
     CVE Records:    https://github.com/CVEProject/cvelistV5
     Recent Deltas:  .../cvelistV5/main/cves/deltaLog.json (rolling 30-day history)
 
-ENVIRONMENT VARIABLES
-    If using the optional --tenable flag, the following variables must be exported:
-    TENABLE_HOST         - The IP or hostname of your Tenable.sc instance
-    TENABLE_ACCESS_KEY   - Tenable API access key
-    TENABLE_SECRET_KEY   - Tenable API secret key
-
 OPTIONAL DEPENDENCIES
     argcomplete - Shell tab completion        (pip install argcomplete)
 
