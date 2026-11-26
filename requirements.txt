@@ -5,4 +5,4 @@
 # Install these packages only if you need the extended features.
 
 # Required for terminal tab autocompletion
-argcomplete>=3.7.2
+argcomplete>=3.8.0
